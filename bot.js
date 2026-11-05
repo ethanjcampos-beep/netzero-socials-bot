@@ -19,12 +19,12 @@ const ROOT_FOLDER = 'Net Zero X Venuum Content';
 const env = process.env;
 
 const TOPICS = {
-  campaigns: { name: '📣 Upcoming Campaigns', color: 16766590, pin: '📣 Post upcoming campaigns, launches and tasks here in plain words, like "Urus kit launch reel – Mike – due Friday". Say "done with the Urus reel" when it\'s finished. /tasks shows the full list, and I post a check-in every Monday.' },
-  content:   { name: '🎬 New Content',       color: 13338331, pin: '🎬 Upload new content here: videos, photos, edits, raw footage. Add a caption if you can (car, brand, raw or edited). Every file is saved to the shared Google Drive and sorted into folders automatically, and you get a link back.' },
-  logins:    { name: '🔐 Logins',            color: 16478047, pin: '🔐 Post account logins here, any format. One account per message works best. I save each one, flag anything missing, and update it if you post a new password.' },
-  oversight: { name: '👀 Post Oversight',    color: 7322096,  pin: '👀 Post what you put out today: what, where, and any numbers. Any format works, and screenshots are fine. Ethan gets a private nudge at 9 PM if nothing is logged.' },
-  ai:        { name: '🤖 AI Content',        color: 9367192,  pin: '🤖 Drop AI-generated images and videos here, with the prompt if you have it. Files are saved to Drive under AI Content, and prompts and ideas are saved so the assistant can find them later.' },
+  ai:        { name: '🤖 AI Content Requests', color: 9367192,  pin: '🤖 Want something made with AI? Post it here: the car, the kit, the vibe, where it\'s going. Each request is logged for Ethan. Finished pieces get posted back here and saved to Drive.' },
+  watcher:   { name: '📡 Post Watcher',        color: 7322096,  pin: '📡 Everything going out on the pages lands here: what was posted, where, and the media. Follow along, and ask in General if you have questions or ideas.' },
+  campaigns: { name: '📣 Future Campaigns',    color: 16766590, pin: '📣 What\'s coming up: campaigns, launches, shoots, and when. Ask in General for the current plan anytime.' },
+  logins:    { name: '🔐 Logins',              color: 16478047, pin: '🔐 Account logins, any format, one account per message. Saved and checked automatically, and updated when a new password is posted.' },
 };
+const RETIRED_TOPICS = ['content', 'oversight', 'rundown', 'tasks', 'info'];
 
 // =================== tiny file-backed store ===================
 fs.mkdirSync(DATA, { recursive: true });
@@ -97,7 +97,7 @@ async function fetchFile(file_id) {
 async function onMessage(m, edited) {
   if (!m.from || m.from.is_bot) return;
   const cfg = store.get('config', { chatId: null, topics: {} });
-  if (cfg.topics.rundown && !cfg.topics.oversight) { cfg.topics.oversight = cfg.topics.rundown; delete cfg.topics.rundown; store.put('config', cfg); }
+  if (cfg.topics.rundown && !cfg.topics.watcher) { cfg.topics.watcher = cfg.topics.rundown; delete cfg.topics.rundown; store.put('config', cfg); }
   if (cfg.topics.tasks && !cfg.topics.campaigns) { cfg.topics.campaigns = cfg.topics.tasks; delete cfg.topics.tasks; store.put('config', cfg); }
   const text = (m.text || m.caption || '').trim();
   const thread = m.is_topic_message ? m.message_thread_id : undefined;
@@ -125,6 +125,13 @@ async function onMessage(m, edited) {
       return reply(`✅ This topic is now ${TOPICS[key].name}`);
     }
     const made = [];
+    for (const key of RETIRED_TOPICS) {
+      if (cfg.topics[key] && !Object.values(TOPICS).length) continue;
+      if (cfg.topics[key] && !Object.keys(TOPICS).some((k) => cfg.topics[k] === cfg.topics[key])) {
+        await tg('deleteForumTopic', { chat_id: m.chat.id, message_thread_id: cfg.topics[key] });
+      }
+      delete cfg.topics[key];
+    }
     for (const [key, t] of Object.entries(TOPICS)) {
       if (cfg.topics[key]) { await tg('editForumTopic', { chat_id: m.chat.id, message_thread_id: cfg.topics[key], name: t.name }); continue; }
       const r = await tg('createForumTopic', { chat_id: m.chat.id, name: t.name, icon_color: t.color });
@@ -141,23 +148,24 @@ async function onMessage(m, edited) {
   if (cmd === 'drive') return reply(store.get('google')?.rootLink ? `🎬 Content folder: ${store.get('google').rootLink}` : 'Google Drive isn\'t connected yet.');
   if (cmd === 'help' || cmd === 'start') return reply(
 `Hub topics: just post. I log everything and flag anything that's missing or looks wrong.
-🎬 New Content / 🤖 AI Content: upload files and they're saved and sorted in Google Drive.
-General: tag me (@${store.get('botinfo')?.username}) or reply to me for anything.
+📡 Post Watcher: what's gone out on the pages. 🤖 AI Content Requests: ask for AI pieces.
+General: just ask. No need to tag me.
 /tasks · /rundown · /drive`);
 
   const hubKey = Object.keys(TOPICS).find((k) => cfg.topics[k] === thread);
-  if (cfg.chatId === m.chat.id && (hubKey === 'content' || hubKey === 'ai')) {
-    if (!edited && mediaOf(m)) return saveContent(m, reply, hubKey === 'ai');
-    if (!edited && text) return runLogger(m, hubKey, reply);
-    return;
-  }
   if (cfg.chatId === m.chat.id && hubKey) {
     if (edited && hubKey !== 'logins') return;
+    if (mediaOf(m) && (hubKey === 'watcher' || hubKey === 'ai')) {
+      await saveContent(m, reply, hubKey);
+      if (hubKey === 'watcher') await markWatched(m);
+      return;
+    }
+    if (!text) return;
     return runLogger(m, hubKey, reply);
   }
 
   if (!edited) pushHistory('general', `${name(m.from)}: ${text || '[media]'}`);
-  if (!edited && addressedToBot(m)) return runAssistant(m, 'general', (t) => send(m.chat.id, t, thread, false, m.message_id));
+  if (!edited && (text || m.photo)) return runAssistant(m, 'general', (t) => send(m.chat.id, t, thread, false, m.message_id), !addressedToBot(m));
 }
 
 // =================== logger agent ===================
@@ -189,12 +197,15 @@ const LOGGER_TOOL = {
   },
 };
 
-async function runLogger(m, hubKey, reply) {
+async function runLogger(m, hubKey, reply, quiet = false) {
   const today = torontoNow().date;
   const logins = store.get('logins', {});
   const tasks = store.get('tasks', { nextId: 1, items: [] });
   const context = [
     `Topic: ${TOPICS[hubKey].name}. Sender: ${name(m.from)}. Today (Toronto): ${today}.`,
+    hubKey === 'ai' ? 'This topic is for AI content requests from the team: log each request as a new task, text starting with "AI request:", assignee Ethan. If the sender is posting a finished piece or a prompt, save it as info with tags "ai prompt".' :
+    hubKey === 'watcher' ? 'This topic is the feed of what went out on the pages: log it as rundown (posts with platform, account, content).' :
+    hubKey === 'campaigns' ? 'This topic is upcoming campaigns and plans: log each as a new task with any owner and date given.' : '',
     `Known accounts: ${Object.values(logins).map((l) => `${l.platform} @${l.handle}${l.email ? ` (${l.email})` : ''}`).join('; ') || 'none yet'}`,
     `Open tasks: ${tasks.items.filter((t) => t.status === 'todo' || t.status === 'doing').map((t) => `#${t.id} ${t.text}${t.assignee ? ` [${t.assignee}]` : ''}`).join('; ') || 'none'}`,
   ].join('\n');
@@ -247,6 +258,7 @@ async function runLogger(m, hubKey, reply) {
   }
 
   await react(m, problems.length ? '🤔' : '👍');
+  if (quiet) return;
   if (problems.length) await reply(`${done.length ? '✅ Logged: ' + done.join(' · ') + '\n' : ''}⚠️ Check: ${problems.join(' · ')}`);
   else if (done.some((d) => d.startsWith('task') || d.startsWith('updated'))) await reply('✅ ' + done.join(' · '));
 }
@@ -265,13 +277,14 @@ const CONTENT_TOOL = {
   input_schema: { type: 'object', properties: {
     brand: { type: 'string', description: 'Venuum, Net Zero, or Other' },
     category: { type: 'string', description: 'Main subject folder, usually the car (e.g. "Mercedes GLC", "Audi RS6", "Lamborghini Urus") or an event/shoot. Reuse an existing category name exactly if it fits.' },
-    content_type: { type: 'string', enum: ['Raw Footage', 'Edited Reels', 'Photos', 'Graphics', 'AI Content', 'Other'] },
+    content_type: { type: 'string', enum: ['Raw Footage', 'Edited Reels', 'Photos', 'Graphics', 'AI Content', 'Posted', 'Other'] },
     title: { type: 'string', description: 'Short descriptive file title, 3-8 words, no date' },
     description: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } },
   }, required: ['brand', 'category', 'content_type', 'title'] },
 };
 
-async function saveContent(m, reply, isAI = false) {
+async function saveContent(m, reply, hub = 'watcher') {
+  const isAI = hub === 'ai';
   const g = store.get('google');
   if (!g?.refresh) return reply(`⚠️ Google Drive isn't connected yet. An admin needs to open:\n${PUBLIC_URL}/auth?key=YOUR_SETUP_KEY`);
   const media = mediaOf(m);
@@ -307,6 +320,7 @@ async function saveContent(m, reply, isAI = false) {
     const date = torontoNow().date;
     const fileName = `${date} ${clean(c.title)}.${media.ext || 'bin'}`;
     if (isAI) c.content_type = 'AI Content';
+    if (hub === 'watcher') c.content_type = 'Posted';
     const folderId = await ensureFolders([clean(c.brand), clean(c.category), c.content_type]);
     const up = await driveUpload(localPath, fileName, media.mime, folderId, `${c.description || ''}\nUploaded by ${name(m.from)}. ${caption}`.trim());
     fs.rmSync(localPath, { force: true });
@@ -436,10 +450,10 @@ async function runTool(nameT, input, who) {
   return 'unknown tool';
 }
 
-async function runAssistant(m, historyKey, say) {
+async function runAssistant(m, historyKey, say, mayStaySilent = false) {
   tg('sendChatAction', { chat_id: m.chat.id, action: 'typing', message_thread_id: m.is_topic_message ? m.message_thread_id : undefined });
   const now = torontoNow();
-  const system = `You are the assistant in "Net Zero X Venuum Socials", a Telegram group where Ethan, who runs social media for Net Zero Auto and Venuum USA (@venuumusa, luxury car body kits), shows the rest of the team what he is working on. The main goal is growing @netzeroauto on Instagram. The others in the group are there to follow along, ask questions about what's been done or planned, and pitch ideas. Help with anything: what's been posted (post oversight), upcoming campaigns, finding uploaded content in the shared Drive, account logins, and writing captions, hooks, hashtags and scripts aimed at growing @netzeroauto. When someone offers an idea or suggestion, save it with save_info (tags: "idea") and say it's been noted for Ethan. Use your tools for team data and never guess logins or links. Reply in plain text (no markdown symbols), short and direct, like a sharp teammate in a group chat. When you change something, say what you changed.
+  const system = `You are the assistant in "Net Zero X Venuum Socials", a Telegram group where Ethan, who runs social media for Net Zero Auto and Venuum USA (@venuumusa, luxury car body kits), shows the rest of the team what he is working on. The main goal is growing @netzeroauto on Instagram. The others in the group are there to follow along, ask questions about what's been done or planned, and pitch ideas. Help with anything: what's been posted (Post Watcher), upcoming campaigns, finding uploaded content in the shared Drive, account logins, and writing captions, hooks, hashtags and scripts aimed at growing @netzeroauto. When someone offers an idea or suggestion, save it with save_info (tags: "idea") and say it's been noted for Ethan. Use your tools for team data and never guess logins or links. Reply in plain text (no markdown symbols), short and direct, like a sharp teammate in a group chat. When you change something, say what you changed. Nobody needs to tag you: treat every message in the group as possibly for you. Reply with exactly [silent] (nothing else) only when a message is clearly people talking to each other and not asking or requesting anything you could help with, e.g. "lol", "nice", "see you tomorrow Mike".
 Now: ${now.weekday} ${now.date}, ${now.hour}:00 Toronto time. You're talking to ${name(m.from)}.
 Recent chat:\n${store.get(`hist:${historyKey}`, []).join('\n') || '(none)'}`;
   const messages = [{ role: 'user', content: await messageContent(m) }];
@@ -458,7 +472,8 @@ Recent chat:\n${store.get(`hist:${historyKey}`, []).join('\n') || '(none)'}`;
     }
     messages.push({ role: 'user', content: results });
   }
-  answer = answer || 'Done.';
+  if (mayStaySilent && /^\s*\[silent\]\s*$/i.test(answer)) return;
+  answer = answer.replace(/\[silent\]/gi, '').trim() || 'Done.';
   pushHistory(historyKey, `Assistant: ${answer.slice(0, 500)}`);
   for (let i = 0; i < answer.length; i += 4000) await say(answer.slice(i, i + 4000));
 }
@@ -500,11 +515,11 @@ setInterval(async () => {
   const cfg = store.get('config', {});
   if (!cfg.chatId) return;
   const now = torontoNow();
-  if (now.hour === REMINDER_HOUR && cfg.topics.oversight && once(`remind:${now.date}`)) {
+  if (now.hour === REMINDER_HOUR && cfg.topics.watcher && once(`remind:${now.date}`)) {
     // Private nudge to the group owner only (the person running the socials), never a group-wide tag
     const owner = cfg.ownerId || (await findOwner(cfg.chatId));
     const day = store.get(`rundown:${now.date}`, {});
-    if (owner && !day[owner]) await send(owner, `⏰ No post oversight logged for today yet. Drop what went out on @netzeroauto today in 👀 Post Oversight when you get a sec.`);
+    if (owner && !day[owner]) await send(owner, `⏰ No post oversight logged for today yet. Drop what went out on the pages today in 📡 Post Watcher when you get a sec.`);
   }
   if (now.weekday === WEEKLY_DAY && now.hour === WEEKLY_HOUR && once(`weekly:${now.date}`)) {
     await send(cfg.chatId, await weeklySummary());
@@ -513,6 +528,15 @@ setInterval(async () => {
 function once(key) { const s = store.get('sent', {}); if (s[key]) return false; s[key] = 1; store.put('sent', s); return true; }
 
 // =================== helpers ===================
+async function markWatched(m) {
+  const { date } = torontoNow();
+  const day = store.get(`rundown:${date}`, {});
+  const prev = day[m.from.id] || { name: name(m.from), posts: [] };
+  prev.posts = [...(prev.posts || []), { content: m.caption || '(media post)' }];
+  prev.at = Date.now();
+  day[m.from.id] = prev; store.put(`rundown:${date}`, day);
+}
+
 async function findOwner(chatId) {
   const r = await tg('getChatAdministrators', { chat_id: chatId });
   const creator = r.ok && r.result.find((a) => a.status === 'creator');
@@ -541,7 +565,7 @@ function taskList() {
   const items = store.get('tasks', { items: [] }).items;
   const open = items.filter((t) => t.status === 'todo' || t.status === 'doing');
   const done = items.filter((t) => t.status === 'done' && t.doneAt > Date.now() - 7 * 864e5);
-  if (!open.length && !done.length) return 'No tasks yet. Post one in 📣 Upcoming Campaigns.';
+  if (!open.length && !done.length) return 'No tasks yet. Post one in 📣 Future Campaigns.';
   const f = (t) => `${t.status === 'doing' ? '🟨' : t.status === 'done' ? '✅' : '⬜'} #${t.id} ${t.text}${t.assignee ? ` → ${t.assignee}` : ''}${t.due ? ` (due ${t.due})` : ''}`;
   return (open.length ? `Open (${open.length})\n${open.map(f).join('\n')}` : 'No open tasks 🎉') + (done.length ? `\n\nDone this week\n${done.map(f).join('\n')}` : '');
 }
