@@ -19,11 +19,11 @@ const ROOT_FOLDER = 'Net Zero X Venuum Content';
 const env = process.env;
 
 const TOPICS = {
-  logins:  { name: '🔐 Logins',        color: 16478047, pin: '🔐 Post account logins here, any format. One account per message works best. The logger saves each one, flags anything missing, and updates it if you post a new password.' },
-  rundown: { name: '📊 Daily Rundown', color: 7322096,  pin: '📊 Post what you did today: what you posted, where, and any numbers. Any format works, and screenshots are fine. Anyone who hasn\'t posted gets a reminder at 9 PM.' },
-  tasks:   { name: '📋 Future Tasks',  color: 16766590, pin: '📋 Post upcoming tasks in plain words, like "need the GLC reel edited by Friday – Mike". Say "done with the GLC reel" when it\'s finished. The full list is under /tasks.' },
-  content: { name: '🎬 Content',       color: 13338331, pin: '🎬 Upload content here: videos, photos, edits, raw footage. Add a caption if you can (car, brand, raw or edited). Every file is saved to the shared Google Drive and sorted into folders automatically, and you get a link back.' },
-  info:    { name: '🗂 Saved Info',    color: 9367192,  pin: '🗂 Drop anything worth keeping here: links, brand guidelines, hashtags, contacts. It all gets saved and the assistant in General can find it later.' },
+  campaigns: { name: '📣 Upcoming Campaigns', color: 16766590, pin: '📣 Post upcoming campaigns, launches and tasks here in plain words, like "Urus kit launch reel – Mike – due Friday". Say "done with the Urus reel" when it\'s finished. /tasks shows the full list, and I post a check-in every Monday.' },
+  content:   { name: '🎬 New Content',       color: 13338331, pin: '🎬 Upload new content here: videos, photos, edits, raw footage. Add a caption if you can (car, brand, raw or edited). Every file is saved to the shared Google Drive and sorted into folders automatically, and you get a link back.' },
+  logins:    { name: '🔐 Logins',            color: 16478047, pin: '🔐 Post account logins here, any format. One account per message works best. I save each one, flag anything missing, and update it if you post a new password.' },
+  oversight: { name: '👀 Post Oversight',    color: 7322096,  pin: '👀 Post what you put out today: what, where, and any numbers. Any format works, and screenshots are fine. Anyone who hasn\'t posted gets a reminder at 9 PM.' },
+  ai:        { name: '🤖 AI Content',        color: 9367192,  pin: '🤖 Drop AI-generated images and videos here, with the prompt if you have it. Files are saved to Drive under AI Content, and prompts and ideas are saved so the assistant can find them later.' },
 };
 
 // =================== tiny file-backed store ===================
@@ -97,6 +97,8 @@ async function fetchFile(file_id) {
 async function onMessage(m, edited) {
   if (!m.from || m.from.is_bot) return;
   const cfg = store.get('config', { chatId: null, topics: {} });
+  if (cfg.topics.rundown && !cfg.topics.oversight) { cfg.topics.oversight = cfg.topics.rundown; delete cfg.topics.rundown; store.put('config', cfg); }
+  if (cfg.topics.tasks && !cfg.topics.campaigns) { cfg.topics.campaigns = cfg.topics.tasks; delete cfg.topics.tasks; store.put('config', cfg); }
   const text = (m.text || m.caption || '').trim();
   const thread = m.is_topic_message ? m.message_thread_id : undefined;
   const reply = (t, html) => send(m.chat.id, t, thread, html, m.message_id);
@@ -123,7 +125,7 @@ async function onMessage(m, edited) {
     }
     const made = [];
     for (const [key, t] of Object.entries(TOPICS)) {
-      if (cfg.topics[key]) continue;
+      if (cfg.topics[key]) { await tg('editForumTopic', { chat_id: m.chat.id, message_thread_id: cfg.topics[key], name: t.name }); continue; }
       const r = await tg('createForumTopic', { chat_id: m.chat.id, name: t.name, icon_color: t.color });
       if (!r.ok) return reply(`Couldn't create topics: ${r.description}\nTurn on Topics and make me an admin with "Manage topics" + "Pin messages".`);
       cfg.topics[key] = r.result.message_thread_id;
@@ -138,14 +140,14 @@ async function onMessage(m, edited) {
   if (cmd === 'drive') return reply(store.get('google')?.rootLink ? `🎬 Content folder: ${store.get('google').rootLink}` : 'Google Drive isn\'t connected yet.');
   if (cmd === 'help' || cmd === 'start') return reply(
 `Hub topics: just post. I log everything and flag anything that's missing or looks wrong.
-🎬 Content: upload files and they're saved and sorted in Google Drive.
+🎬 New Content / 🤖 AI Content: upload files and they're saved and sorted in Google Drive.
 General: tag me (@${store.get('botinfo')?.username}) or reply to me for anything.
 /tasks · /rundown · /drive`);
 
-  const hubKey = Object.keys(cfg.topics).find((k) => cfg.topics[k] === thread);
-  if (cfg.chatId === m.chat.id && hubKey === 'content') {
-    if (!edited && mediaOf(m)) return saveContent(m, reply);
-    if (!edited && text) return runLogger(m, 'info', reply);
+  const hubKey = Object.keys(TOPICS).find((k) => cfg.topics[k] === thread);
+  if (cfg.chatId === m.chat.id && (hubKey === 'content' || hubKey === 'ai')) {
+    if (!edited && mediaOf(m)) return saveContent(m, reply, hubKey === 'ai');
+    if (!edited && text) return runLogger(m, hubKey, reply);
     return;
   }
   if (cfg.chatId === m.chat.id && hubKey) {
@@ -172,13 +174,13 @@ const LOGGER_TOOL = {
         brand: { type: 'string', description: 'Net Zero, Venuum, or other' },
         manager: { type: 'string', description: 'who runs the account' }, notes: { type: 'string' },
       }, required: ['platform'] } },
-      rundown: { type: 'object', description: 'Daily rundown of work done', properties: {
+      rundown: { type: 'object', description: 'Post oversight: what the sender posted/published today', properties: {
         posts: { type: 'array', items: { type: 'object', properties: { platform: { type: 'string' }, account: { type: 'string' }, content: { type: 'string' } } } },
         other_work: { type: 'string' }, numbers: { type: 'string' }, issues: { type: 'string' },
       } },
-      new_tasks: { type: 'array', items: { type: 'object', properties: { text: { type: 'string' }, assignee: { type: 'string' }, due: { type: 'string' } }, required: ['text'] } },
+      new_tasks: { type: 'array', description: 'Campaigns, launches or tasks to add', items: { type: 'object', properties: { text: { type: 'string' }, assignee: { type: 'string' }, due: { type: 'string' } }, required: ['text'] } },
       task_updates: { type: 'array', items: { type: 'object', properties: { id: { type: 'integer' }, status: { type: 'string', enum: ['todo', 'doing', 'done', 'dropped'] } }, required: ['id', 'status'] } },
-      info: { type: 'object', description: 'General info worth saving (links, guidelines, contacts, hashtags…)', properties: { title: { type: 'string' }, content: { type: 'string' }, tags: { type: 'string' } } },
+      info: { type: 'object', description: 'Info worth saving: links, guidelines, contacts, hashtags, AI prompts and ideas', properties: { title: { type: 'string' }, content: { type: 'string' }, tags: { type: 'string' } } },
       problems: { type: 'array', items: { type: 'string' }, description: 'Anything missing, inconsistent or likely wrong: missing password/handle, malformed email, handle with spaces, rundown with no posts listed, task with no owner or due date, conflicts with existing records, handle typos vs existing records. Empty if all good.' },
       nothing_to_log: { type: 'boolean', description: 'true if the message is just chat/acknowledgement' },
     },
@@ -262,13 +264,13 @@ const CONTENT_TOOL = {
   input_schema: { type: 'object', properties: {
     brand: { type: 'string', description: 'Venuum, Net Zero, or Other' },
     category: { type: 'string', description: 'Main subject folder, usually the car (e.g. "Mercedes GLC", "Audi RS6", "Lamborghini Urus") or an event/shoot. Reuse an existing category name exactly if it fits.' },
-    content_type: { type: 'string', enum: ['Raw Footage', 'Edited Reels', 'Photos', 'Graphics', 'Other'] },
+    content_type: { type: 'string', enum: ['Raw Footage', 'Edited Reels', 'Photos', 'Graphics', 'AI Content', 'Other'] },
     title: { type: 'string', description: 'Short descriptive file title, 3-8 words, no date' },
     description: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } },
   }, required: ['brand', 'category', 'content_type', 'title'] },
 };
 
-async function saveContent(m, reply) {
+async function saveContent(m, reply, isAI = false) {
   const g = store.get('google');
   if (!g?.refresh) return reply(`⚠️ Google Drive isn't connected yet. An admin needs to open:\n${PUBLIC_URL}/auth?key=YOUR_SETUP_KEY`);
   const media = mediaOf(m);
@@ -303,6 +305,7 @@ async function saveContent(m, reply) {
 
     const date = torontoNow().date;
     const fileName = `${date} ${clean(c.title)}.${media.ext || 'bin'}`;
+    if (isAI) c.content_type = 'AI Content';
     const folderId = await ensureFolders([clean(c.brand), clean(c.category), c.content_type]);
     const up = await driveUpload(localPath, fileName, media.mime, folderId, `${c.description || ''}\nUploaded by ${name(m.from)}. ${caption}`.trim());
     fs.rmSync(localPath, { force: true });
@@ -496,15 +499,15 @@ setInterval(async () => {
   const cfg = store.get('config', {});
   if (!cfg.chatId) return;
   const now = torontoNow();
-  if (now.hour === REMINDER_HOUR && cfg.topics.rundown && once(`remind:${now.date}`)) {
+  if (now.hour === REMINDER_HOUR && cfg.topics.oversight && once(`remind:${now.date}`)) {
     const members = store.get('members', {}), day = store.get(`rundown:${now.date}`, {});
     const missing = Object.entries(members).filter(([id]) => !day[id]);
     await send(cfg.chatId, missing.length
-      ? `⏰ Rundown time. Still waiting on: ${missing.map(([id, u]) => `<a href="tg://user?id=${id}">${esc(u.name)}</a>`).join(', ')}\nDrop what you did today 👇`
-      : '✅ Everyone has posted a rundown today. Nice work.', cfg.topics.rundown, true);
+      ? `⏰ Post oversight time. Still waiting on: ${missing.map(([id, u]) => `<a href="tg://user?id=${id}">${esc(u.name)}</a>`).join(', ')}\nDrop what you did today 👇`
+      : '✅ Everyone has posted their oversight today. Nice work.', cfg.topics.oversight, true);
   }
-  if (now.weekday === WEEKLY_DAY && now.hour === WEEKLY_HOUR && cfg.topics.tasks && once(`weekly:${now.date}`)) {
-    await send(cfg.chatId, '🗓 Weekly task check-in\n\n' + taskList(), cfg.topics.tasks);
+  if (now.weekday === WEEKLY_DAY && now.hour === WEEKLY_HOUR && cfg.topics.campaigns && once(`weekly:${now.date}`)) {
+    await send(cfg.chatId, '🗓 Weekly campaign check-in\n\n' + taskList(), cfg.topics.campaigns);
   }
 }, 60e3);
 function once(key) { const s = store.get('sent', {}); if (s[key]) return false; s[key] = 1; store.put('sent', s); return true; }
@@ -514,7 +517,7 @@ function taskList() {
   const items = store.get('tasks', { items: [] }).items;
   const open = items.filter((t) => t.status === 'todo' || t.status === 'doing');
   const done = items.filter((t) => t.status === 'done' && t.doneAt > Date.now() - 7 * 864e5);
-  if (!open.length && !done.length) return 'No tasks yet. Post one in 📋 Future Tasks.';
+  if (!open.length && !done.length) return 'No tasks yet. Post one in 📣 Upcoming Campaigns.';
   const f = (t) => `${t.status === 'doing' ? '🟨' : t.status === 'done' ? '✅' : '⬜'} #${t.id} ${t.text}${t.assignee ? ` → ${t.assignee}` : ''}${t.due ? ` (due ${t.due})` : ''}`;
   return (open.length ? `Open (${open.length})\n${open.map(f).join('\n')}` : 'No open tasks 🎉') + (done.length ? `\n\nDone this week\n${done.map(f).join('\n')}` : '');
 }
