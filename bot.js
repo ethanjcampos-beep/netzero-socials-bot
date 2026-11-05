@@ -11,7 +11,8 @@ import { Readable } from 'node:stream';
 const MODEL = 'claude-sonnet-5-5';
 const TZ = 'America/Toronto';
 const REMINDER_HOUR = 21, WEEKLY_DAY = 'Mon', WEEKLY_HOUR = 9, HISTORY = 30;
-const LOCAL_API = 'http://127.0.0.1:8081';
+const HAS_LOCAL = !!(env.TELEGRAM_API_ID && /^\d+$/.test(env.TELEGRAM_API_ID));
+const LOCAL_API = HAS_LOCAL ? 'http://127.0.0.1:8081' : 'https://api.telegram.org'; // local server = 2GB files; cloud = 20MB
 const DATA = '/data/bot';
 const PUBLIC_URL = `https://${process.env.RAILWAY_PUBLIC_DOMAIN || 'localhost'}`;
 const ROOT_FOLDER = 'Net Zero X Venuum Content';
@@ -57,13 +58,14 @@ const react = (m, emoji) => tg('setMessageReaction', { chat_id: m.chat.id, messa
 
 async function poll() {
   // One-time move from Telegram's cloud API to our local server (needed for 2GB files)
-  if (!store.get('loggedOut')) {
+  if (HAS_LOCAL && !store.get('loggedOut')) {
     await tg('deleteWebhook', {}, 'https://api.telegram.org');
     const r = await tg('logOut', {}, 'https://api.telegram.org');
     if (r.ok) { store.put('loggedOut', true); flush(); console.log('Logged out of cloud API; waiting for local server'); }
   }
   const me = await tg('getMe', {});
-  if (!me.ok) { console.log('local API not ready, retrying'); return setTimeout(poll, 5000); }
+  if (!me.ok) { console.log('Telegram API not ready, retrying'); return setTimeout(poll, 5000); }
+  if (!HAS_LOCAL) await tg('deleteWebhook', {});
   store.put('botinfo', me.result);
   console.log('Running as @' + me.result.username);
   let offset = store.get('offset', 0);
@@ -78,6 +80,18 @@ async function poll() {
   }
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Returns a local filesystem path for a Telegram file (downloads it when on the cloud API)
+async function fetchFile(file_id) {
+  const f = await tg('getFile', { file_id });
+  if (!f.ok) throw new Error(/too big/i.test(f.description) ? 'file is over 20MB. Big uploads turn on once the Telegram API keys are added.' : f.description);
+  if (HAS_LOCAL) return f.result.file_path;
+  const tmp = path.join('/tmp', `tg-${Date.now()}-${path.basename(f.result.file_path)}`);
+  const r = await fetch(`https://api.telegram.org/file/bot${env.BOT_TOKEN}/${f.result.file_path}`);
+  if (!r.ok) throw new Error(`download failed (${r.status})`);
+  await fs.promises.writeFile(tmp, Buffer.from(await r.arrayBuffer()));
+  return tmp;
+}
 
 // =================== routing ===================
 async function onMessage(m, edited) {
@@ -269,14 +283,15 @@ async function saveContent(m, reply) {
   }
 
   try {
-    const f = await tg('getFile', { file_id: media.file.file_id });
-    if (!f.ok) throw new Error(f.description);
-    const localPath = f.result.file_path;
+    const localPath = await fetchFile(media.file.file_id);
 
     const content = [];
     if (media.thumb) {
-      const t = await tg('getFile', { file_id: media.thumb.file_id });
-      if (t.ok && fs.statSync(t.result.file_path).size < 4.5e6) content.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: fs.readFileSync(t.result.file_path).toString('base64') } });
+      try {
+        const tp = await fetchFile(media.thumb.file_id);
+        if (fs.statSync(tp).size < 4.5e6) content.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: fs.readFileSync(tp).toString('base64') } });
+        if (!HAS_LOCAL) fs.rmSync(tp, { force: true });
+      } catch {}
     }
     const existing = [...new Set(store.get('content', []).map((c) => `${c.brand} / ${c.category}`))];
     content.push({ type: 'text', text: `Uploaded by ${name(m.from)}. Kind: ${media.kind}${media.name ? `, filename "${media.name}"` : ''}${media.file.duration ? `, ${media.file.duration}s` : ''}.\nCaption: ${caption || '(none)'}\nExisting folders: ${existing.join('; ') || 'none yet'}` });
@@ -454,8 +469,11 @@ async function messageContent(m) {
   const parts = [];
   if (m.photo) {
     const p = [...m.photo].reverse().find((x) => (x.file_size || 0) < 4.5e6) || m.photo[0];
-    const f = await tg('getFile', { file_id: p.file_id });
-    if (f.ok) parts.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: fs.readFileSync(f.result.file_path).toString('base64') } });
+    try {
+      const fp = await fetchFile(p.file_id);
+      parts.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: fs.readFileSync(fp).toString('base64') } });
+      if (!HAS_LOCAL) fs.rmSync(fp, { force: true });
+    } catch {}
   }
   let text = m.text || m.caption || '';
   if (m.reply_to_message?.text) text = `(replying to: "${m.reply_to_message.text.slice(0, 300)}")\n${text}`;
