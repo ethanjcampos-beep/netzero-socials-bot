@@ -22,7 +22,7 @@ const TOPICS = {
   campaigns: { name: '📣 Upcoming Campaigns', color: 16766590, pin: '📣 Post upcoming campaigns, launches and tasks here in plain words, like "Urus kit launch reel – Mike – due Friday". Say "done with the Urus reel" when it\'s finished. /tasks shows the full list, and I post a check-in every Monday.' },
   content:   { name: '🎬 New Content',       color: 13338331, pin: '🎬 Upload new content here: videos, photos, edits, raw footage. Add a caption if you can (car, brand, raw or edited). Every file is saved to the shared Google Drive and sorted into folders automatically, and you get a link back.' },
   logins:    { name: '🔐 Logins',            color: 16478047, pin: '🔐 Post account logins here, any format. One account per message works best. I save each one, flag anything missing, and update it if you post a new password.' },
-  oversight: { name: '👀 Post Oversight',    color: 7322096,  pin: '👀 Post what you put out today: what, where, and any numbers. Any format works, and screenshots are fine. Anyone who hasn\'t posted gets a reminder at 9 PM.' },
+  oversight: { name: '👀 Post Oversight',    color: 7322096,  pin: '👀 Post what you put out today: what, where, and any numbers. Any format works, and screenshots are fine. Ethan gets a private nudge at 9 PM if nothing is logged.' },
   ai:        { name: '🤖 AI Content',        color: 9367192,  pin: '🤖 Drop AI-generated images and videos here, with the prompt if you have it. Files are saved to Drive under AI Content, and prompts and ideas are saved so the assistant can find them later.' },
 };
 
@@ -116,6 +116,7 @@ async function onMessage(m, edited) {
   if (cmd === 'setup' || cmd === 'link') {
     if (!(await isAdmin(m.chat.id, m.from.id))) return reply('Only group admins can do that.');
     cfg.chatId = m.chat.id;
+    if (!cfg.ownerId) await findOwner(m.chat.id);
     if (cmd === 'link') {
       const key = args.toLowerCase();
       if (!TOPICS[key] || !thread) return reply(`Use this inside a topic: /link ${Object.keys(TOPICS).join(' | ')}`);
@@ -438,7 +439,7 @@ async function runTool(nameT, input, who) {
 async function runAssistant(m, historyKey, say) {
   tg('sendChatAction', { chat_id: m.chat.id, action: 'typing', message_thread_id: m.is_topic_message ? m.message_thread_id : undefined });
   const now = torontoNow();
-  const system = `You are the team assistant in "Net Zero X Venuum Socials", the Telegram group for the social media team of Net Zero Auto and Venuum USA (@venuumusa, luxury car body kits). You help with anything the team needs: finding account logins, managing tasks, summarizing daily rundowns, finding uploaded content in the shared Google Drive, writing captions, hooks, hashtags and scripts, planning content, and answering questions. Use your tools for team data and never guess logins or links. Reply in plain text (no markdown symbols) and keep it short and direct, like a sharp teammate in a group chat. When you change something, say what you changed.
+  const system = `You are the assistant in "Net Zero X Venuum Socials", a Telegram group where Ethan, who runs social media for Net Zero Auto and Venuum USA (@venuumusa, luxury car body kits), shows the rest of the team what he is working on. The main goal is growing @netzeroauto on Instagram. The others in the group are there to follow along, ask questions about what's been done or planned, and pitch ideas. Help with anything: what's been posted (post oversight), upcoming campaigns, finding uploaded content in the shared Drive, account logins, and writing captions, hooks, hashtags and scripts aimed at growing @netzeroauto. When someone offers an idea or suggestion, save it with save_info (tags: "idea") and say it's been noted for Ethan. Use your tools for team data and never guess logins or links. Reply in plain text (no markdown symbols), short and direct, like a sharp teammate in a group chat. When you change something, say what you changed.
 Now: ${now.weekday} ${now.date}, ${now.hour}:00 Toronto time. You're talking to ${name(m.from)}.
 Recent chat:\n${store.get(`hist:${historyKey}`, []).join('\n') || '(none)'}`;
   const messages = [{ role: 'user', content: await messageContent(m) }];
@@ -500,19 +501,42 @@ setInterval(async () => {
   if (!cfg.chatId) return;
   const now = torontoNow();
   if (now.hour === REMINDER_HOUR && cfg.topics.oversight && once(`remind:${now.date}`)) {
-    const members = store.get('members', {}), day = store.get(`rundown:${now.date}`, {});
-    const missing = Object.entries(members).filter(([id]) => !day[id]);
-    await send(cfg.chatId, missing.length
-      ? `⏰ Post oversight time. Still waiting on: ${missing.map(([id, u]) => `<a href="tg://user?id=${id}">${esc(u.name)}</a>`).join(', ')}\nDrop what you did today 👇`
-      : '✅ Everyone has posted their oversight today. Nice work.', cfg.topics.oversight, true);
+    // Private nudge to the group owner only (the person running the socials), never a group-wide tag
+    const owner = cfg.ownerId || (await findOwner(cfg.chatId));
+    const day = store.get(`rundown:${now.date}`, {});
+    if (owner && !day[owner]) await send(owner, `⏰ No post oversight logged for today yet. Drop what went out on @netzeroauto today in 👀 Post Oversight when you get a sec.`);
   }
-  if (now.weekday === WEEKLY_DAY && now.hour === WEEKLY_HOUR && cfg.topics.campaigns && once(`weekly:${now.date}`)) {
-    await send(cfg.chatId, '🗓 Weekly campaign check-in\n\n' + taskList(), cfg.topics.campaigns);
+  if (now.weekday === WEEKLY_DAY && now.hour === WEEKLY_HOUR && once(`weekly:${now.date}`)) {
+    await send(cfg.chatId, await weeklySummary());
   }
 }, 60e3);
 function once(key) { const s = store.get('sent', {}); if (s[key]) return false; s[key] = 1; store.put('sent', s); return true; }
 
 // =================== helpers ===================
+async function findOwner(chatId) {
+  const r = await tg('getChatAdministrators', { chat_id: chatId });
+  const creator = r.ok && r.result.find((a) => a.status === 'creator');
+  if (creator) { const cfg = store.get('config', {}); cfg.ownerId = creator.user.id; store.put('config', cfg); return creator.user.id; }
+  return null;
+}
+
+async function weeklySummary() {
+  const days = [];
+  for (let i = 0; i < 7; i++) { const d = torontoNow(Date.now() - i * 864e5).date; const day = store.get(`rundown:${d}`, {}); if (Object.keys(day).length) days.push({ date: d, entries: Object.values(day) }); }
+  const tasks = store.get('tasks', { items: [] }).items;
+  const open = tasks.filter((t) => t.status === 'todo' || t.status === 'doing');
+  const done = tasks.filter((t) => t.status === 'done' && t.doneAt > Date.now() - 7 * 864e5);
+  const content = store.get('content', []).filter((c) => c.date >= torontoNow(Date.now() - 7 * 864e5).date);
+  const ideas = store.get('info', []).filter((i) => /idea/i.test(i.tags || '') && i.date >= torontoNow(Date.now() - 7 * 864e5).date);
+  const res = await claude({
+    system: 'You write a short weekly update for a Telegram group where a small team follows along with the social media work being done to grow @netzeroauto on Instagram (Net Zero Auto / Venuum USA, luxury car body kits). Plain text, no markdown symbols, a few short sections with emoji headers: what went out this week, campaigns in progress and what is coming up, content added, and any ideas from the team. Be specific and brief. If a section has nothing, skip it. End with one line inviting questions or ideas (people can tag the bot).',
+    messages: [{ role: 'user', content: JSON.stringify({ week_ending: torontoNow().date, daily_oversight: days, campaigns_open: open, campaigns_done: done, content_added: content.map((c) => ({ title: c.title, type: c.content_type, category: c.category, by: c.by })), team_ideas: ideas }) }],
+    max_tokens: 900,
+  });
+  const text = res.content?.filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
+  return '🗓 Weekly update\n\n' + (text || taskList());
+}
+
 function taskList() {
   const items = store.get('tasks', { items: [] }).items;
   const open = items.filter((t) => t.status === 'todo' || t.status === 'doing');
