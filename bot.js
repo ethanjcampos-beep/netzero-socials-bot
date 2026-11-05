@@ -11,7 +11,7 @@ import { Readable } from 'node:stream';
 const MODEL = 'claude-sonnet-5-5';
 const TZ = 'America/Toronto';
 const REMINDER_HOUR = 21, WEEKLY_DAY = 'Mon', WEEKLY_HOUR = 9, HISTORY = 30;
-const HAS_LOCAL = !!(env.TELEGRAM_API_ID && /^\d+$/.test(env.TELEGRAM_API_ID));
+const HAS_LOCAL = /^\d+$/.test(process.env.TELEGRAM_API_ID || "");
 const LOCAL_API = HAS_LOCAL ? 'http://127.0.0.1:8081' : 'https://api.telegram.org'; // local server = 2GB files; cloud = 20MB
 const DATA = '/data/bot';
 const PUBLIC_URL = `https://${process.env.RAILWAY_PUBLIC_DOMAIN || 'localhost'}`;
