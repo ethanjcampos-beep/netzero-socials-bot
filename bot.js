@@ -635,4 +635,17 @@ http.createServer(async (req, res) => {
   } catch (e) { res.writeHead(500); res.end('Error: ' + e.message); }
 }).listen(env.PORT || 3000);
 
+// announce.txt: on deploy, post its contents in the group (General) word for word, once per unique text
+async function announceOnDeploy() {
+  const file = path.join(path.dirname(new URL(import.meta.url).pathname), 'announce.txt');
+  const body = fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim() : '';
+  if (!body) return;
+  const cfg = store.get('config', { chatId: null });
+  const sent = store.get('announced', []);
+  if (!cfg.chatId || sent.includes(body)) return;
+  const r = await send(cfg.chatId, body);
+  if (r.ok) { store.put('announced', [...sent, body].slice(-20)); flush(); console.log('announcement posted'); }
+}
+announceOnDeploy().catch((e) => console.log('announce error', e.message));
+
 poll();
