@@ -106,6 +106,14 @@ async function onMessage(m, edited) {
   if (m.chat.type === 'private') {
     if (!cfg.chatId || !(await isMember(cfg.chatId, m.from.id))) return send(m.chat.id, 'I only work for members of the Net Zero X Venuum Socials group.');
     if (text.startsWith('/start')) return send(m.chat.id, 'Hey. Ask me anything: logins, tasks, rundowns, content, captions, ideas.');
+    // /post <message>: a group admin DMs this and the bot posts the message in the group (General), word for word
+    if (/^\/post(@\w+)?(\s|$)/i.test(text)) {
+      if (!(await isAdmin(cfg.chatId, m.from.id))) return send(m.chat.id, 'Only group admins can post through me.');
+      const body = (m.text || '').replace(/^\/post(@\w+)?[ \t]*\n?/i, '').trim();
+      if (!body) return send(m.chat.id, 'Send /post followed by the message to post in the group.');
+      const r = await send(cfg.chatId, body);
+      return send(m.chat.id, r.ok ? '✅ Posted in the group.' : `Couldn't post: ${r.description}`);
+    }
     return runAssistant(m, `dm:${m.from.id}`, (t) => send(m.chat.id, t));
   }
 
@@ -399,6 +407,7 @@ const ASSISTANT_TOOLS = [
   { name: 'share_content_folder', description: 'Give someone access to the shared content folder by Google email.', input_schema: { type: 'object', properties: { email: { type: 'string' }, role: { type: 'string', enum: ['reader', 'writer'] } }, required: ['email'] } },
   { name: 'search_info', description: 'Search saved info (links, guidelines, contacts, hashtags). Empty query = latest.', input_schema: { type: 'object', properties: { query: { type: 'string' } } } },
   { name: 'save_info', description: 'Save a piece of info for the team.', input_schema: LOGGER_TOOL.input_schema.properties.info },
+  { name: 'post_to_group', description: 'Post a message in the team group (General) as the bot. Only when a group admin (Ethan) asks you to send/post/announce something to the group. Post their text exactly word for word; do not reword, add to or shorten it. If they ask you to write it, write it, then post.', input_schema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] } },
   { type: 'web_search_20250305', name: 'web_search', max_uses: 3 },
 ];
 const match = (items, q, n = 50) => {
@@ -407,9 +416,16 @@ const match = (items, q, n = 50) => {
   return words.length ? scored.filter(([, s]) => s).sort((a, b) => b[1] - a[1]).map(([i]) => i).slice(0, n) : items.slice(-n);
 };
 
-async function runTool(nameT, input, who) {
+async function runTool(nameT, input, who, fromId) {
   const today = torontoNow().date;
   switch (nameT) {
+    case 'post_to_group': {
+      const cfg = store.get('config', { chatId: null });
+      if (!cfg.chatId) return 'Group not set up yet (run /setup in the group).';
+      if (!(await isAdmin(cfg.chatId, fromId))) return 'Only group admins can have me post in the group.';
+      const r = await send(cfg.chatId, input.text);
+      return r.ok ? 'Posted in the group.' : `Could not post: ${r.description}`;
+    }
     case 'search_logins': { const r = match(Object.values(store.get('logins', {})), input.query); return r.length ? r : 'No matching logins saved.'; }
     case 'save_login': {
       const logins = store.get('logins', {}); input.handle = (input.handle || '').replace(/^@/, '');
@@ -467,7 +483,7 @@ Recent chat:\n${store.get(`hist:${historyKey}`, []).join('\n') || '(none)'}`;
     if (res.stop_reason !== 'tool_use') break;
     const results = [];
     for (const b of res.content.filter((c) => c.type === 'tool_use')) {
-      const out = await runTool(b.name, b.input, name(m.from)).catch((e) => `error: ${e.message}`);
+      const out = await runTool(b.name, b.input, name(m.from), m.from.id).catch((e) => `error: ${e.message}`);
       results.push({ type: 'tool_result', tool_use_id: b.id, content: typeof out === 'string' ? out : JSON.stringify(out) });
     }
     messages.push({ role: 'user', content: results });
