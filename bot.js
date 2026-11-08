@@ -160,7 +160,7 @@ async function onMessage(m, edited) {
 General: just ask. No need to tag me.
 /tasks · /rundown · /drive`);
 
-  const hubKey = Object.keys(TOPICS).find((k) => cfg.topics[k] === thread);
+  const hubKey = thread ? Object.keys(TOPICS).find((k) => cfg.topics?.[k] === thread) : undefined;
   if (cfg.chatId === m.chat.id && hubKey) {
     if (edited && hubKey !== 'logins') return;
     if (mediaOf(m) && (hubKey === 'watcher' || hubKey === 'ai')) {
@@ -218,9 +218,9 @@ async function runLogger(m, hubKey, reply, quiet = false) {
     `Open tasks: ${tasks.items.filter((t) => t.status === 'todo' || t.status === 'doing').map((t) => `#${t.id} ${t.text}${t.assignee ? ` [${t.assignee}]` : ''}`).join('; ') || 'none'}`,
   ].join('\n');
   const res = await claude({
-    system: `You are the logging agent for "Net Zero X Venuum Socials", the social media team for Net Zero Auto and Venuum USA (luxury car body kits). You read messages posted in the team's hub topics and extract structured records exactly as written. Never invent or "fix" values such as passwords or handles; copy them character for character. Put anything doubtful in problems. The topic hints at what to expect, but log whatever the message actually contains.\n\n${context}`,
+    system: `You are the logging agent for "Net Zero X Venuum Socials", the social media team for Net Zero Auto and Venuum USA (luxury car body kits). You read messages posted in the team's hub topics and extract structured records exactly as written. Never invent or "fix" values such as passwords or handles; copy them character for character. Put anything doubtful in problems. The topic hints at what to expect, but log whatever the message actually contains. Always respond by calling the record tool exactly once.\n\n${context}`,
     messages: [{ role: 'user', content: await messageContent(m) }],
-    tools: [LOGGER_TOOL], tool_choice: { type: 'tool', name: 'record' }, max_tokens: 2000,
+    tools: [LOGGER_TOOL], tool_choice: { type: 'auto' }, max_tokens: 2000,
   });
   const rec = res.content?.find((b) => b.type === 'tool_use')?.input;
   if (!rec) return reply(`⚠️ I couldn't read that one${res.error ? ` (${res.error.message})` : ''}. Try again?`);
@@ -320,8 +320,8 @@ async function saveContent(m, reply, hub = 'watcher') {
     const existing = [...new Set(store.get('content', []).map((c) => `${c.brand} / ${c.category}`))];
     content.push({ type: 'text', text: `Uploaded by ${name(m.from)}. Kind: ${media.kind}${media.name ? `, filename "${media.name}"` : ''}${media.file.duration ? `, ${media.file.duration}s` : ''}.\nCaption: ${caption || '(none)'}\nExisting folders: ${existing.join('; ') || 'none yet'}` });
     const res = await claude({
-      system: 'You sort content for the Net Zero Auto / Venuum USA social media team (luxury cars, body kits, wraps). Look at the thumbnail and caption, identify the car and type of content, and categorize it. Prefer existing folder names.',
-      messages: [{ role: 'user', content }], tools: [CONTENT_TOOL], tool_choice: { type: 'tool', name: 'categorize' }, max_tokens: 800,
+      system: 'You sort content for the Net Zero Auto / Venuum USA social media team (luxury cars, body kits, wraps). Look at the thumbnail and caption, identify the car and type of content, and categorize it. Prefer existing folder names. Always respond by calling the categorize tool.',
+      messages: [{ role: 'user', content }], tools: [CONTENT_TOOL], tool_choice: { type: 'auto' }, max_tokens: 800,
     });
     const c = res.content?.find((b) => b.type === 'tool_use')?.input || { brand: 'Other', category: 'Unsorted', content_type: 'Other', title: media.name || 'Upload' };
 
