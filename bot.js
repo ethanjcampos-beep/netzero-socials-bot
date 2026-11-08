@@ -19,12 +19,12 @@ const ROOT_FOLDER = 'Net Zero X Venuum Content';
 const env = process.env;
 
 const TOPICS = {
-  ai:        { name: '🤖 AI Content Requests', color: 9367192,  pin: '🤖 Want something made with AI? Post it here: the car, the kit, the vibe, where it\'s going. Each request is logged for Ethan. Finished pieces get posted back here and saved to Drive.' },
-  watcher:   { name: '📡 Post Watcher',        color: 7322096,  pin: '📡 Everything going out on the pages lands here: what was posted, where, and the media. Follow along, and ask in General if you have questions or ideas.' },
-  campaigns: { name: '📣 Future Campaigns',    color: 16766590, pin: '📣 What\'s coming up: campaigns, launches, shoots, and when. Ask in General for the current plan anytime.' },
-  logins:    { name: '🔐 Logins',              color: 16478047, pin: '🔐 Account logins, any format, one account per message. Saved and checked automatically, and updated when a new password is posted.' },
+  promo:     { name: 'Ads & Promo',      color: 9367192,  pin: 'Ads and promo to-dos go here: Meta ads, lead ads, Google ads, boosts, collabs, giveaways, anything we need to push. Post it in plain words with who and when if you know. Each one is logged as a task, and "done with ___" checks it off.' },
+  watcher:   { name: 'Post Watcher',     color: 7322096,  pin: 'Everything going out on the pages lands here: what was posted, where, and the media. Follow along, and ask in General if you have questions or ideas.' },
+  campaigns: { name: 'Future Campaigns', color: 16766590, pin: 'What\'s coming up: campaigns, launches, shoots, and when. Ask in General for the current plan anytime.' },
+  logins:    { name: 'Logins',           color: 16478047, pin: 'Account logins, any format, one account per message. Saved and checked automatically, and updated when a new password is posted.' },
 };
-const RETIRED_TOPICS = ['content', 'oversight', 'rundown', 'tasks', 'info'];
+const RETIRED_TOPICS = ['content', 'oversight', 'rundown', 'tasks', 'info', 'ai'];
 
 // =================== tiny file-backed store ===================
 fs.mkdirSync(DATA, { recursive: true });
@@ -156,14 +156,14 @@ async function onMessage(m, edited) {
   if (cmd === 'drive') return reply(store.get('google')?.rootLink ? `🎬 Content folder: ${store.get('google').rootLink}` : 'Google Drive isn\'t connected yet.');
   if (cmd === 'help' || cmd === 'start') return reply(
 `Hub topics: just post. I log everything and flag anything that's missing or looks wrong.
-📡 Post Watcher: what's gone out on the pages. 🤖 AI Content Requests: ask for AI pieces.
+Post Watcher: what's gone out on the pages. Ads & Promo: ads and promo to-dos.
 General: just ask. No need to tag me.
 /tasks · /rundown · /drive`);
 
   const hubKey = thread ? Object.keys(TOPICS).find((k) => cfg.topics?.[k] === thread) : undefined;
   if (cfg.chatId === m.chat.id && hubKey) {
     if (edited && hubKey !== 'logins') return;
-    if (mediaOf(m) && (hubKey === 'watcher' || hubKey === 'ai')) {
+    if (mediaOf(m) && hubKey === 'watcher') {
       await saveContent(m, reply, hubKey);
       if (hubKey === 'watcher') await markWatched(m);
       return;
@@ -211,7 +211,7 @@ async function runLogger(m, hubKey, reply, quiet = false) {
   const tasks = store.get('tasks', { nextId: 1, items: [] });
   const context = [
     `Topic: ${TOPICS[hubKey].name}. Sender: ${name(m.from)}. Today (Toronto): ${today}.`,
-    hubKey === 'ai' ? 'This topic is for AI content requests from the team: log each request as a new task, text starting with "AI request:", assignee Ethan. If the sender is posting a finished piece or a prompt, save it as info with tags "ai prompt".' :
+    hubKey === 'promo' ? 'This topic is the ads and promo to-do list (Meta ads, lead ads, Google ads, boosts, collabs, giveaways, promo pushes): log each item as a new task, text starting with "Promo:", with any owner and due date given. If they say something is done, mark that task done.' :
     hubKey === 'watcher' ? 'This topic is the feed of what went out on the pages: log it as rundown (posts with platform, account, content).' :
     hubKey === 'campaigns' ? 'This topic is upcoming campaigns and plans: log each as a new task with any owner and date given.' : '',
     `Known accounts: ${Object.values(logins).map((l) => `${l.platform} @${l.handle}${l.email ? ` (${l.email})` : ''}`).join('; ') || 'none yet'}`,
@@ -469,7 +469,7 @@ async function runTool(nameT, input, who, fromId) {
 async function runAssistant(m, historyKey, say, mayStaySilent = false) {
   tg('sendChatAction', { chat_id: m.chat.id, action: 'typing', message_thread_id: m.is_topic_message ? m.message_thread_id : undefined });
   const now = torontoNow();
-  const system = `You are the assistant in "Net Zero X Venuum Socials", a Telegram group where Ethan, who runs social media for Net Zero Auto and Venuum USA (@venuumusa, luxury car body kits), shows the rest of the team what he is working on. The main goal is growing @netzeroauto on Instagram. The others in the group are there to follow along, ask questions about what's been done or planned, and pitch ideas. Help with anything: what's been posted (Post Watcher), upcoming campaigns, finding uploaded content in the shared Drive, account logins, and writing captions, hooks, hashtags and scripts aimed at growing @netzeroauto. When someone offers an idea or suggestion, save it with save_info (tags: "idea") and say it's been noted for Ethan. Use your tools for team data and never guess logins or links. Reply in plain text (no markdown symbols), short and direct, like a sharp teammate in a group chat. When you change something, say what you changed. Nobody needs to tag you: treat every message in the group as possibly for you. Reply with exactly [silent] (nothing else) only when a message is clearly people talking to each other and not asking or requesting anything you could help with, e.g. "lol", "nice", "see you tomorrow Mike".
+  const system = `You are the assistant in "Net Zero X Venuum Socials", a Telegram group where Ethan, who runs social media for Net Zero Auto and Venuum USA (@venuumusa, luxury car body kits), shows the rest of the team what he is working on. The main goal is growing @netzeroauto on Instagram. The others in the group are there to follow along, ask questions about what's been done or planned, and pitch ideas. Help with anything: what's been posted (Post Watcher), upcoming campaigns, finding uploaded content in the shared Drive, account logins, and writing captions, hooks, hashtags and scripts aimed at growing @netzeroauto. When someone offers an idea or suggestion, save it with save_info (tags: "idea") and say it's been noted for Ethan. Use your tools for team data and never guess logins or links. Reply in plain text (no markdown symbols, no emojis), short and direct, like a sharp teammate in a group chat. When you change something, say what you changed. Nobody needs to tag you: treat every message in the group as possibly for you. Reply with exactly [silent] (nothing else) only when a message is clearly people talking to each other and not asking or requesting anything you could help with, e.g. "lol", "nice", "see you tomorrow Mike".
 Now: ${now.weekday} ${now.date}, ${now.hour}:00 Toronto time. You're talking to ${name(m.from)}.
 Recent chat:\n${store.get(`hist:${historyKey}`, []).join('\n') || '(none)'}`;
   const messages = [{ role: 'user', content: await messageContent(m) }];
@@ -535,7 +535,7 @@ setInterval(async () => {
     // Private nudge to the group owner only (the person running the socials), never a group-wide tag
     const owner = cfg.ownerId || (await findOwner(cfg.chatId));
     const day = store.get(`rundown:${now.date}`, {});
-    if (owner && !day[owner]) await send(owner, `⏰ No post oversight logged for today yet. Drop what went out on the pages today in 📡 Post Watcher when you get a sec.`);
+    if (owner && !day[owner]) await send(owner, `Nothing logged in Post Watcher today yet. Drop what went out on the pages when you get a sec.`);
   }
   if (now.weekday === WEEKLY_DAY && now.hour === WEEKLY_HOUR && once(`weekly:${now.date}`)) {
     await send(cfg.chatId, await weeklySummary());
@@ -569,7 +569,7 @@ async function weeklySummary() {
   const content = store.get('content', []).filter((c) => c.date >= torontoNow(Date.now() - 7 * 864e5).date);
   const ideas = store.get('info', []).filter((i) => /idea/i.test(i.tags || '') && i.date >= torontoNow(Date.now() - 7 * 864e5).date);
   const res = await claude({
-    system: 'You write a short weekly update for a Telegram group where a small team follows along with the social media work being done to grow @netzeroauto on Instagram (Net Zero Auto / Venuum USA, luxury car body kits). Plain text, no markdown symbols, a few short sections with emoji headers: what went out this week, campaigns in progress and what is coming up, content added, and any ideas from the team. Be specific and brief. If a section has nothing, skip it. End with one line inviting questions or ideas (people can tag the bot).',
+    system: 'You write a short weekly update for a Telegram group where a small team follows along with the social media work being done to grow @netzeroauto on Instagram (Net Zero Auto / Venuum USA, luxury car body kits). Plain text, no markdown symbols, a few short sections with plain-word headers and no emojis: what went out this week, campaigns in progress and what is coming up, content added, and any ideas from the team. Be specific and brief. If a section has nothing, skip it. End with one line inviting questions or ideas (people can tag the bot).',
     messages: [{ role: 'user', content: JSON.stringify({ week_ending: torontoNow().date, daily_oversight: days, campaigns_open: open, campaigns_done: done, content_added: content.map((c) => ({ title: c.title, type: c.content_type, category: c.category, by: c.by })), team_ideas: ideas }) }],
     max_tokens: 900,
   });
@@ -581,7 +581,7 @@ function taskList() {
   const items = store.get('tasks', { items: [] }).items;
   const open = items.filter((t) => t.status === 'todo' || t.status === 'doing');
   const done = items.filter((t) => t.status === 'done' && t.doneAt > Date.now() - 7 * 864e5);
-  if (!open.length && !done.length) return 'No tasks yet. Post one in 📣 Future Campaigns.';
+  if (!open.length && !done.length) return 'No tasks yet. Post one in Future Campaigns or Ads & Promo.';
   const f = (t) => `${t.status === 'doing' ? '🟨' : t.status === 'done' ? '✅' : '⬜'} #${t.id} ${t.text}${t.assignee ? ` → ${t.assignee}` : ''}${t.due ? ` (due ${t.due})` : ''}`;
   return (open.length ? `Open (${open.length})\n${open.map(f).join('\n')}` : 'No open tasks 🎉') + (done.length ? `\n\nDone this week\n${done.map(f).join('\n')}` : '');
 }
@@ -647,5 +647,26 @@ async function announceOnDeploy() {
   if (r.ok) { store.put('announced', [...sent, body].slice(-20)); flush(); console.log('announcement posted'); }
 }
 announceOnDeploy().catch((e) => console.log('announce error', e.message));
+
+// One-time: AI Content Requests becomes Ads & Promo, and every topic gets its plain (no emoji) name and intro.
+// Renames happen in place, so nothing new is posted in General. Pins are sent silently.
+const TOPIC_VERSION = 2;
+async function migrateTopics() {
+  const cfg = store.get('config', { topics: {} });
+  if (!cfg.chatId || (cfg.topicVersion || 0) >= TOPIC_VERSION) return;
+  if (cfg.topics?.ai && !cfg.topics.promo) { cfg.topics.promo = cfg.topics.ai; delete cfg.topics.ai; }
+  for (const [key, t] of Object.entries(TOPICS)) {
+    const thread = cfg.topics[key];
+    if (!thread) continue;
+    const r = await tg('editForumTopic', { chat_id: cfg.chatId, message_thread_id: thread, name: t.name });
+    if (!r.ok && !/NOT_MODIFIED/.test(r.description || '')) { console.log('rename failed', key, r.description); continue; }
+    await tg('unpinAllForumTopicMessages', { chat_id: cfg.chatId, message_thread_id: thread });
+    const p = await tg('sendMessage', { chat_id: cfg.chatId, message_thread_id: thread, text: t.pin, disable_notification: true });
+    if (p.ok) await tg('pinChatMessage', { chat_id: cfg.chatId, message_id: p.result.message_id, disable_notification: true });
+  }
+  cfg.topicVersion = TOPIC_VERSION; store.put('config', cfg); flush();
+  console.log('topics migrated to v' + TOPIC_VERSION);
+}
+setTimeout(() => migrateTopics().catch((e) => console.log('migrate error', e.message)), 8000);
 
 poll();
