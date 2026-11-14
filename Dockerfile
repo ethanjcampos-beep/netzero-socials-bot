@@ -2,7 +2,7 @@
 FROM aiogram/telegram-bot-api:latest
 RUN apk add --no-cache nodejs
 WORKDIR /app
-COPY package.json bot.js start.sh announce.txt ./
+COPY package.json bot.js start.sh announce*.txt ./
 RUN chmod +x start.sh
 ENTRYPOINT []
 CMD ["/app/start.sh"]

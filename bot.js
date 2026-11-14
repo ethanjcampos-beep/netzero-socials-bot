@@ -23,6 +23,7 @@ const TOPICS = {
   watcher:   { name: 'Post Watcher',     color: 7322096,  pin: 'Everything going out on the pages lands here: what was posted, where, and the media. Follow along, and ask in General if you have questions or ideas.' },
   campaigns: { name: 'Future Campaigns', color: 16766590, pin: 'What\'s coming up: campaigns, launches, shoots, and when. Ask in General for the current plan anytime.' },
   logins:    { name: 'Logins',           color: 16478047, pin: 'Account logins, any format, one account per message. Saved and checked automatically, and updated when a new password is posted.' },
+  meta:      { name: 'Meta ads',         color: 13338331, pin: 'Meta ad updates land here: what is running on Facebook and Instagram, the budget, and how it is doing. Ask in General if you have questions.' },
 };
 const RETIRED_TOPICS = ['content', 'oversight', 'rundown', 'tasks', 'info', 'ai'];
 
@@ -213,7 +214,8 @@ async function runLogger(m, hubKey, reply, quiet = false) {
     `Topic: ${TOPICS[hubKey].name}. Sender: ${name(m.from)}. Today (Toronto): ${today}.`,
     hubKey === 'promo' ? 'This topic is the ads and promo to-do list (Meta ads, lead ads, Google ads, boosts, collabs, giveaways, promo pushes): log each item as a new task, text starting with "Promo:", with any owner and due date given. If they say something is done, mark that task done.' :
     hubKey === 'watcher' ? 'This topic is the feed of what went out on the pages: log it as rundown (posts with platform, account, content).' :
-    hubKey === 'campaigns' ? 'This topic is upcoming campaigns and plans: log each as a new task with any owner and date given.' : '',
+    hubKey === 'campaigns' ? 'This topic is upcoming campaigns and plans: log each as a new task with any owner and date given.' :
+    hubKey === 'meta' ? 'This topic is updates on the Meta (Facebook and Instagram) ads that are running: log each update as rundown (what is running, budget, results).' : '',
     `Known accounts: ${Object.values(logins).map((l) => `${l.platform} @${l.handle}${l.email ? ` (${l.email})` : ''}`).join('; ') || 'none yet'}`,
     `Open tasks: ${tasks.items.filter((t) => t.status === 'todo' || t.status === 'doing').map((t) => `#${t.id} ${t.text}${t.assignee ? ` [${t.assignee}]` : ''}`).join('; ') || 'none'}`,
   ].join('\n');
@@ -668,5 +670,35 @@ async function migrateTopics() {
   console.log('topics migrated to v' + TOPIC_VERSION);
 }
 setTimeout(() => migrateTopics().catch((e) => console.log('migrate error', e.message)), 8000);
+
+// Create any hub topic that does not exist yet (for example Meta ads), then post topic announcements.
+// announce-<topic key>.txt: on deploy, post its contents in that topic word for word, once per unique text.
+async function ensureTopics() {
+  const cfg = store.get('config', { chatId: null, topics: {} });
+  if (!cfg.chatId) return;
+  cfg.topics = cfg.topics || {};
+  for (const [key, t] of Object.entries(TOPICS)) {
+    if (cfg.topics[key]) continue;
+    const r = await tg('createForumTopic', { chat_id: cfg.chatId, name: t.name, icon_color: t.color });
+    if (!r.ok) { console.log('create topic failed', key, r.description); continue; }
+    cfg.topics[key] = r.result.message_thread_id;
+    store.put('config', cfg); flush();
+    await postPinned(cfg.chatId, cfg.topics[key], t.pin);
+    console.log('topic created', key);
+  }
+  const dir = path.dirname(new URL(import.meta.url).pathname);
+  for (const key of Object.keys(TOPICS)) {
+    const file = path.join(dir, `announce-${key}.txt`);
+    const body = fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim() : '';
+    const thread = cfg.topics[key];
+    if (!body || !thread) continue;
+    const sent = store.get('announced', []);
+    const tag = `${key}:${body}`;
+    if (sent.includes(tag)) continue;
+    const r = await send(cfg.chatId, body, thread);
+    if (r.ok) { store.put('announced', [...sent, tag].slice(-20)); flush(); console.log('topic announcement posted', key); }
+  }
+}
+setTimeout(() => ensureTopics().catch((e) => console.log('ensureTopics error', e.message)), 14000);
 
 poll();
